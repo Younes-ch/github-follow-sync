@@ -3,7 +3,7 @@ from termcolor import cprint
 import requests
 import sys
 
-def send_get_request(url: str, headers: dict) -> dict:
+def send_get_request(url: str, headers: dict) -> requests.Response:
     """Get the response from the url and return it as a dictionary."""
     if headers is None:
         cprint("You need to provide a token!", "red")
