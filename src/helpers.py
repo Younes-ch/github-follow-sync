@@ -1,22 +1,27 @@
-from termcolor import cprint
-
 import requests
 import sys
 
 def send_get_request(url: str, headers: dict) -> requests.Response:
-    """Get the response from the url and return it as a dictionary."""
-    if headers is None:
-        cprint("You need to provide a token!", "red")
-        sys.exit()
-    else:
-        response = requests.get(url, headers=headers)
+    """Send a GET request and return the Response."""
+    if not headers or not headers.get("Authorization"):
+        print("❌ Missing Authorization header. Set TOKEN in your environment.")
+        sys.exit(1)
+    response = requests.get(url, headers=headers)
     return response
 
-def send_delete_request(url: str, headers: dict):
-    """Send a delete request to the url."""
-    if headers is None:
-        cprint("You need to provide a token!", "red")
-        sys.exit()
-    else:
-        response = requests.delete(url, headers=headers)
+def send_delete_request(url: str, headers: dict) -> requests.Response:
+    """Send a DELETE request to the url and return the Response."""
+    if not headers or not headers.get("Authorization"):
+        print("❌ Missing Authorization header. Set TOKEN in your environment.")
+        sys.exit(1)
+    response = requests.delete(url, headers=headers)
+    return response
+
+
+def send_put_request(url: str, headers: dict) -> requests.Response:
+    """Send a PUT request to the url and return the Response."""
+    if not headers or not headers.get("Authorization"):
+        print("❌ Missing Authorization header. Set TOKEN in your environment.")
+        sys.exit(1)
+    response = requests.put(url, headers=headers)
     return response
