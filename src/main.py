@@ -2,7 +2,6 @@ from helpers import send_get_request, send_delete_request
 from termcolor import colored, cprint
 from dotenv import load_dotenv
 
-import requests
 import sys
 import os
 
@@ -94,8 +93,7 @@ if choice.lower() == "y" or choice.lower() == "yes":
         choice = input("""1- Do you want to unfollow all the users who are not following back at once.\n2- Do you want to select who to unfollow one by one.\n""")
         if choice.lower() == "1":
             for user in not_following_back:
-                response = send_delete_request(user["unfollow_link"], TOKEN)
-                print(response.text, response.status_code)
+                response = send_delete_request(user["unfollow_link"], headers)
                 if response.status_code == 204:
                     cprint(f"Unfollowed {user['username']} successfully!", "green")
                 else:
