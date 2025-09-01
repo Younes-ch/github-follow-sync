@@ -9,3 +9,4 @@ requests==2.31.0
 rich==14.1.0
 termcolor==2.3.0
 urllib3==2.0.3
+questionary==2.1.1

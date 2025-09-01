@@ -7,12 +7,13 @@ from typing import Iterable, List, Dict
 from dotenv import load_dotenv
 from rich import box
 from rich.console import Console
-from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.panel import Panel
 from rich.text import Text
 from rich.align import Align
+
+import questionary
 
 from helpers import send_get_request, send_delete_request, send_put_request
 
@@ -59,7 +60,6 @@ def iter_paginated(url: str, headers: Dict[str, str]) -> Iterable[Dict]:
         for item in data:
             yield item
 
-        # pagination via Link header
         link = resp.headers.get("Link", "")
         next_url = None
         for part in link.split(","):
@@ -99,36 +99,42 @@ def show_table(users: List[str], title: str):
     console.print(table)
 
 
-def batch_unfollow(users: List[str], token: str):
+def batch_unfollow(users: List[str], token: str) -> List[str]:
     headers = auth_headers(token)
     successes = 0
     failures = 0
+    success_users: List[str] = []
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=False, console=console) as progress:
         task = progress.add_task("🧹 Unfollowing...", total=len(users))
         for user in users:
             resp = send_delete_request(f"https://api.github.com/user/following/{user}", headers)
             if resp.status_code == 204:
                 successes += 1
+                success_users.append(user)
             else:
                 failures += 1
             progress.advance(task)
     console.print(f"✅ [green]Unfollowed {successes}[/] • ❌ [red]failed {failures}[/]")
+    return success_users
 
 
-def batch_follow(users: List[str], token: str):
+def batch_follow(users: List[str], token: str) -> List[str]:
     headers = auth_headers(token)
     successes = 0
     failures = 0
+    success_users: List[str] = []
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=False, console=console) as progress:
         task = progress.add_task("➕ Following...", total=len(users))
         for user in users:
             resp = send_put_request(f"https://api.github.com/user/following/{user}", headers)
             if resp.status_code in (204, 200):
                 successes += 1
+                success_users.append(user)
             else:
                 failures += 1
             progress.advance(task)
     console.print(f"✅ [green]Followed {successes}[/] • ❌ [red]failed {failures}[/]")
+    return success_users
 
 
 def main():
@@ -136,7 +142,6 @@ def main():
     token = require_token()
     headers = auth_headers(token)
 
-    # Pre-flight check
     ping = send_get_request("https://api.github.com/user", headers)
     if ping.status_code == 200:
         me = ping.json().get("login", "you")
@@ -147,76 +152,77 @@ def main():
     else:
         console.print(f"⚠️ [yellow]Warning:[/] GitHub returned {ping.status_code}")
 
+    def pick_and_apply(users: List[str], action_label: str, apply_fn) -> List[str]:
+        emoji = "🚫" if action_label == "Unfollow" else ("➕" if action_label == "Follow" else "")
+        show_table(users, title=f"{emoji} {action_label} candidates ({len(users)})")
+        decision = questionary.select(
+            message="How do you want to proceed?",
+            choices=[
+                questionary.Choice(title=f"{emoji} {action_label} ALL listed users", value="all"),
+                questionary.Choice(title="🎯 Pick users", value="pick"),
+                questionary.Choice(title="🛑 Cancel", value="cancel"),
+            ],
+        ).ask()
+        if decision == "cancel":
+            console.print("[dim]🛑 Cancelled.[/]")
+            return []
+        if decision == "all":
+            return apply_fn(users, token)
+        picked = questionary.checkbox(
+            message=f"Select users to {action_label.lower()}",
+            choices=[questionary.Choice(title=u, value=u) for u in users],
+            validate=lambda sel: True if len(sel) > 0 else "Select at least one user or choose Cancel",
+        ).ask()
+        if not picked:
+            console.print("[dim]🛑 No selection.[/]")
+            return []
+        chosen_users = list(picked)
+        console.print(f"{emoji} {action_label} {len(chosen_users)} users...")
+        return apply_fn(chosen_users, token)
+
     following = fetch_usernames("https://api.github.com/user/following", token)
     followers = fetch_usernames("https://api.github.com/user/followers", token)
-
     not_following_me_back = [u for u in following if u not in followers]
     not_followed_by_me = [u for u in followers if u not in following]
 
-    if not not_following_me_back and not not_followed_by_me:
-        console.print("🎉 [bold green]You and your followers are in perfect sync![/]")
-        return
-
-    # Menu
-    console.rule("📋 Menu")
-    options = []
-    idx = 1
-    if not_following_me_back:
-        console.print(f"{idx}) 🚫 Show and optionally unfollow users who don't follow you back [{len(not_following_me_back)}]")
-        options.append("unfollow")
-        idx += 1
-    if not_not_followed := bool(not not_followed_by_me):
-        pass
-    if not_followed_by_me:
-        console.print(f"{idx}) ➕ Show and optionally follow users you don't follow back [{len(not_followed_by_me)}]")
-        options.append("follow")
-        idx += 1
-    console.print(f"{idx}) 🚪 Exit")
-    options.append("exit")
-
-    choice = Prompt.ask("Choose an option", choices=[str(i) for i in range(1, len(options) + 1)], default=str(len(options)))
-    chosen = options[int(choice) - 1]
-
-    def pick_and_apply(users: List[str], action_label: str, apply_fn):
-        emoji = "🚫" if action_label == "Unfollow" else ("➕" if action_label == "Follow" else "")
-        show_table(users, title=f"{emoji} {action_label} candidates ({len(users)})")
-        if not Confirm.ask(f"Do you want to {action_label.lower()} some or all of them?", default=False):
-            return
-        mode = Prompt.ask(f"Choose mode: 1) {emoji} {action_label} all  2) 🎯 Pick by index range", choices=["1", "2"], default="2")
-        if mode == "1":
-            if Confirm.ask(f"Are you sure you want to {action_label.lower()} ALL listed users? {emoji}", default=False):
-                apply_fn(users, token)
-            return
-        console.print(f"🎯 Enter indexes to {action_label.lower()} (e.g. 1-3,5,8). Press Enter to cancel.")
-        raw = console.input("> ").strip()
-        if not raw:
-            console.print("[dim]🛑 No selection.[/]")
-            return
-        selected: List[int] = []
-        for part in raw.split(","):
-            part = part.strip()
-            if "-" in part:
-                a, b = part.split("-", 1)
-                if a.isdigit() and b.isdigit():
-                    start, end = int(a), int(b)
-                    if start <= end:
-                        selected.extend(range(start, end + 1))
-            elif part.isdigit():
-                selected.append(int(part))
-        selected = sorted(set(i for i in selected if 1 <= i <= len(users)))
-        chosen_users = [users[i - 1] for i in selected]
-        if not chosen_users:
-            console.print("[dim]🛑 No valid indexes selected.[/]")
-            return
-        console.print(f"{emoji} {action_label} {len(chosen_users)} users...")
-        apply_fn(chosen_users, token)
-
-    if chosen == "unfollow":
-        pick_and_apply(not_following_me_back, "Unfollow", batch_unfollow)
-    elif chosen == "follow":
-        pick_and_apply(not_followed_by_me, "Follow", batch_follow)
-    else:
-        return
+    while True:
+        if not not_following_me_back and not not_followed_by_me:
+            console.print("🎉 [bold green]You and your followers are in perfect sync![/]")
+            break
+        console.rule("📋 Menu")
+        menu_choices = []
+        if not_following_me_back:
+            menu_choices.append(questionary.Choice(
+                title=f"🚫 Unfollow {len(not_following_me_back)} {'user' if len(not_following_me_back)==1 else 'users'} who don't follow you back",
+                value="unfollow",
+            ))
+        if not_followed_by_me:
+            menu_choices.append(questionary.Choice(
+                title=f"➕ Follow {len(not_followed_by_me)} {'user' if len(not_followed_by_me)==1 else 'users'} you don't follow back",
+                value="follow",
+            ))
+        menu_choices.append(questionary.Choice(title="🚪 Exit", value="exit"))
+        chosen = questionary.select(
+            message="Choose an option",
+            choices=menu_choices,
+        ).ask()
+        if chosen == "unfollow":
+            success = pick_and_apply(not_following_me_back, "Unfollow", batch_unfollow)
+            if success:
+                success_set = set(success)
+                not_following_me_back = [u for u in not_following_me_back if u not in success_set]
+                following = [u for u in following if u not in success_set]
+            continue
+        if chosen == "follow":
+            success = pick_and_apply(not_followed_by_me, "Follow", batch_follow)
+            if success:
+                success_set = set(success)
+                not_followed_by_me = [u for u in not_followed_by_me if u not in success_set]
+                for u in success:
+                    if u not in following:
+                        following.append(u)
+            continue
+        break
 
 
 if __name__ == "__main__":
